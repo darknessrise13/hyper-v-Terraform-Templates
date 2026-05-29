@@ -1,0 +1,130 @@
+name: Terraform Pipeline
+
+#You will need to create a label for your PRs named "Approved".  Creating a PR with this label or labeling a PR with this label will create a new action to run Terraform Apply.
+
+on:
+  pull_request:
+    types: [synchronize, labeled, reopened] 
+  push:
+    branches:
+      - main
+      - '**'
+
+jobs:
+  terraform:
+    name: Terraform Deploy/Plan
+    runs-on: ubuntu-latest
+
+    env:
+      HYPERV_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      LINUX_KEY: ${{ secrets.LINUX_SSH_KEY }}
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_BUCKET: ${{ secrets.TERRAFORM_S3_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.TERRAFORM_S3_ACCESS }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_S3_PASSWORD }} 
+      TF_VAR_domain_user: ${{ secrets.DOMAIN_USER }} #Username for the Domain Administrator.
+      TF_VAR_domain_user_password: ${{ secrets.DOMAIN_USER_PASSWORD }} #Password to the Domain Administrator.
+      TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }} #Your AD name.
+      TF_VAR_vm_local_password: ${{ secrets.LOCAL_ADMIN_PASSWORD }} #Administrator password in your Windows image.
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      # These are defined in your Github secrets and imported into the pipeline.
+
+    steps:
+      # Checkout
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # This defines and installs Terraform on the fly
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.7" # Specify your project's version
+
+      - name: Create SSH Key File
+        run: |
+          # Create a temp file and write the secret into it
+          echo "${{ secrets.HYPERVISOR_SSH_PRIVATE_KEY }}" > ~/.ssh/hyperv_key
+          chmod 600 ~/.ssh/hyperv_key
+
+# ---------------------------------------------------------
+# Check for "Approved" Label
+# ---------------------------------------------------------
+      - name: 🏷️ Check for "Approved" Label
+        id: check-label
+        if: github.event_name == 'pull_request'
+        run: |
+          API_URL="${{ github.server_url }}/api/v1/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/labels"
+
+          LABELS=$(curl -s \
+            -H "Authorization: token ${{ secrets.GITEA_TOKEN }}" \
+            "$API_URL")
+
+          echo "Labels JSON: $LABELS"
+
+          if echo "$LABELS" | jq '.[] | select(.name == "Approved")' | grep -q .; then
+            echo "label_approved=true" >> $GITHUB_OUTPUT
+          else
+            echo "label_approved=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Format Terraform files in each directory
+      - name: Terraform Format
+        run: |
+          terraform fmt -check -recursive .
+
+      # Initialize Terraform with Backend in each directory
+      - name: Terraform Init
+        run: |
+          DIRS=$(find . -type f -name "*.tf" ! -path "*/.terraform/*" -exec dirname {} \; | sort -u)
+          for dir in $DIRS; do
+            echo "Initializing Terraform with local S3 backend in $dir..."
+            clean_dir=$(echo "$dir" | sed -e 's|^\./||' -e 's|^\.$|root|')
+            cd "$dir"
+            terraform init -input=false \
+              -backend-config="bucket=${{ secrets.TERRAFORM_S3_BUCKET }}" \
+              -backend-config="key=${{ github.event.repository.name }}/${clean_dir}/terraform.tfstate" \
+              -backend-config="use_path_style=true" \
+              -backend-config="encrypt=false" \
+              -backend-config="skip_s3_checksum=true" \
+              -backend-config="skip_credentials_validation=true" \
+              -backend-config="skip_metadata_api_check=true" \
+              -backend-config="skip_region_validation=true"
+            cd - > /dev/null
+          done
+
+      # Validate on Push and Pull Request in each directory
+      - name: Terraform Validate
+        run: |
+          DIRS=$(find . -type f -name "*.tf" ! -path "*/.terraform/*" -exec dirname {} \; | sort -u)
+          for dir in $DIRS; do
+            echo "Validating Terraform in $dir..."
+            cd "$dir"
+            terraform validate -no-color || (echo "Validation failed in $dir" && exit 1)
+            cd - > /dev/null
+          done
+
+      # Plan on Push and Pull Request in each directory
+      - name: Terraform Plan
+        run: |
+          DIRS=$(find . -type f -name "*.tf" ! -path "*/.terraform/*" -exec dirname {} \; | sort -u)
+          for dir in $DIRS; do
+            echo "Planning Terraform in $dir..."
+            cd "$dir"
+            terraform plan -out=tfplan -input=false -no-color || (echo "Plan failed in $dir" && exit 1)
+            cd - > /dev/null
+          done
+
+      # Apply on Pull Request with Approved Label in each directory
+      - name: Terraform Apply
+        if: steps.check-label.outputs.label_approved == 'true'
+        run: |
+          DIRS=$(find . -type f -name "*.tf" ! -path "*/.terraform/*" -exec dirname {} \; | sort -u)
+          for dir in $DIRS; do
+            echo "Pull request approved. Running Terraform Apply in $dir"
+            cd "$dir"
+            terraform apply -auto-approve -input=false -no-color tfplan || (echo "Apply failed in $dir" && exit 1)
+            cd - > /dev/null
+          done
