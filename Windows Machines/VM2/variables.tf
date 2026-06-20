@@ -3,21 +3,6 @@ variable "hyperv_host" {
   type        = string
 }
 
-variable "parent_vhd_path" {
-  description = "The path to the parent VHD file"
-  type        = string
-}
-
-variable "snapshot_file_location" {
-  description = "Location to store snapshots"
-  type        = string
-}
-
-variable "smart_paging_file_path" {
-  description = "Location to store smart paging files"
-  type        = string
-}
-
 variable "minimum_vm_memory" {
   description = "Minimum memory allocation for VMs in MB"
   type        = number
@@ -36,12 +21,6 @@ variable "vm_processor_count" {
 variable "vm_name" {
   type        = string
   description = "The name of the virtual machine"
-}
-
-variable "vhd_root_path" {
-  type        = string
-  description = "The root path where the VHD will be stored"
-  default     = "C:\\Hyper-V\\Virtual Hard Disks\\"
 }
 
 variable "domain_name" {

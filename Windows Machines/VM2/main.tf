@@ -2,25 +2,25 @@ provider "hyperv" {
   ssh                  = true
   ssh_host             = var.hyperv_host
   ssh_port             = 22
-  ssh_user             = "administrator" #service account for administering the Hyper-V node
+  ssh_user             = "administrator"     #service account for administering the Hyper-V node
   ssh_private_key_path = "~/.ssh/hyperv_key" #Location of the SSH key from the machine running Terraform.
 }
 
 resource "hyperv_vhd" "os_disk" {
   path = local.vhd_path
-  #vhd_type    = "Dynamic"
-  source = var.parent_vhd_path #This copies the parent disk to be the new primary VHD
+  #vhd_type    = "Dynamic" 
+  source = local.parent_vhd_path #This copies the parent disk to be the new primary VHD
 }
 
 data "hyperv_network_switch" "VM_Adapter" {
-  name                                    = "" #Exact name of the vSwitch
+  name                                    = local.vm_adapter_switch_name
   allow_management_os                     = false
   enable_embedded_teaming                 = false
   enable_iov                              = false
   enable_packet_direct                    = false
   minimum_bandwidth_mode                  = "None"
   switch_type                             = "External"
-  net_adapter_names                       = ["", ] #Exact name of the network adapter attached to the vSwitch.
+  net_adapter_names                       = local.vm_adapter_nics
   default_flow_minimum_bandwidth_absolute = 0
   default_flow_minimum_bandwidth_weight   = 0
   default_queue_vmmq_enabled              = true
